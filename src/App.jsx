@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Plus, X, MessageSquare, Calendar as CalIcon, ArrowRight, Download,
   Upload, Search, Trash2, Send, CornerUpLeft, LayoutGrid, List as ListIcon,
-  Paperclip, Pencil, Check, BookOpen, Flag
+  Paperclip, Pencil, Check, BookOpen, Flag, ChevronDown, ChevronRight
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -159,6 +159,9 @@ export default function App() {
   const [fAssignee, setFAssignee] = useState("all");
   const [fCategory, setFCategory] = useState("all");
   const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState("due");   // "task" | "owner" | "status" | "priority" | "due" | "added"
+  const [sortDir, setSortDir] = useState("asc"); // "asc" | "desc"
+  const [doneCollapsed, setDoneCollapsed] = useState(false);
   const fileRef = useRef(null);
   const [saveState, setSaveState] = useState("saved"); // "saved" | "saving" | "error"
   const saveTimer = useRef(null);
@@ -276,6 +279,35 @@ export default function App() {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const isOverdue = (t) => t.due && t.status !== "done" && new Date(t.due) < today;
   const fmtDate = (d) => d ? new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—";
+  const fmtStamp = (ms) => ms ? new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—";
+
+  // Sorted copy for List view. Empty due dates sort to the bottom.
+  const STATUS_ORDER = STATUSES.reduce((m, s, i) => ((m[s.id] = i), m), {});
+  const PRIO_ORDER = { high: 0, med: 1, low: 2 };
+  const sortVal = (t) => {
+    switch (sortBy) {
+      case "task": return (t.title || "").toLowerCase();
+      case "owner": return t.assignee || "";
+      case "status": return STATUS_ORDER[t.status] ?? 99;
+      case "priority": return PRIO_ORDER[t.priority] ?? 9;
+      case "added": return t.createdAt || 0;
+      case "due":
+      default: return t.due ? new Date(t.due).getTime() : Infinity; // no due date -> bottom
+    }
+  };
+  const visibleSorted = [...visible].sort((a, b) => {
+    const av = sortVal(a), bv = sortVal(b);
+    let cmp = av < bv ? -1 : av > bv ? 1 : 0;
+    if (cmp === 0) { // secondary sort: oldest added first
+      cmp = (a.createdAt || 0) - (b.createdAt || 0);
+    }
+    return sortDir === "asc" ? cmp : -cmp;
+  });
+  const toggleSort = (col) => {
+    if (sortBy === col) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortBy(col); setSortDir("asc"); }
+  };
+  const sortArrow = (col) => (sortBy === col ? (sortDir === "asc" ? " ▲" : " ▼") : "");
 
   return (
     <div style={{ background: BG, minHeight: "100vh", fontFamily: "'Segoe UI', system-ui, sans-serif", color: CHARCOAL }}>
@@ -344,14 +376,21 @@ export default function App() {
                 onDragOver={(e) => { e.preventDefault(); setDragOverCol(col.id); }}
                 onDragLeave={() => setDragOverCol((c) => (c === col.id ? null : c))}
                 onDrop={() => { if (draggedId) moveToEnd(draggedId, col.id); setDraggedId(null); setDragOverCol(null); }}>
-                <div className="col-head" style={col.id === "done" ? { background: "#CFE6D6" } : undefined}>
+                <div className="col-head" style={col.id === "done" ? { background: "#BFDDC8" } : undefined}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <span style={{ width: 9, height: 9, borderRadius: 3, background: col.color }} />
                     <span style={{ fontWeight: 700, fontSize: 12.5, letterSpacing: ".4px", textTransform: "uppercase" }}>{col.label}</span>
                     <span style={{ color: MUTED, fontSize: 12, fontWeight: 600 }}>{items.length}</span>
                   </div>
-                  <button className="col-add" onClick={() => addTask(col.id)} title="Add here"><Plus size={14} /></button>
+                  {col.id === "done" ? (
+                    <button className="col-add" onClick={() => setDoneCollapsed((v) => !v)} title={doneCollapsed ? "Show done" : "Hide done"}>
+                      {doneCollapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+                    </button>
+                  ) : (
+                    <button className="col-add" onClick={() => addTask(col.id)} title="Add here"><Plus size={14} /></button>
+                  )}
                 </div>
+                {!(col.id === "done" && doneCollapsed) && (
                 <div className="col-body">
                   {items.map((t) => (
                     <div key={t.id} className="card" draggable
@@ -363,7 +402,7 @@ export default function App() {
                       }}
                       onClick={() => setEditingId(t.id)}
                       style={{
-                        background: t.status === "done" ? "#F0F8F2" : CARD,
+                        background: t.status === "done" ? "#CFE6D6" : CARD,
                         border: t.urgent ? "1.5px solid #C0392B" : `1px solid ${HAIR}`,
                         borderLeft: `3px solid ${CATEGORIES[t.category].color}`,
                         boxShadow: t.urgent
@@ -405,6 +444,7 @@ export default function App() {
                   ))}
                   {items.length === 0 && <div className="empty">Drop tasks here</div>}
                 </div>
+                )}
               </div>
             );
           })}
@@ -418,16 +458,17 @@ export default function App() {
             <table className="tbl">
               <thead>
                 <tr>
-                  <th style={{ minWidth: 260 }}>Task</th>
-                  <th>Owner</th>
-                  <th style={{ minWidth: 150 }}>Status</th>
-                  <th>Priority</th>
-                  <th>Due</th>
+                  <th className="sortable" style={{ minWidth: 260 }} onClick={() => toggleSort("task")}>Task{sortArrow("task")}</th>
+                  <th className="sortable" onClick={() => toggleSort("owner")}>Owner{sortArrow("owner")}</th>
+                  <th className="sortable" style={{ minWidth: 150 }} onClick={() => toggleSort("status")}>Status{sortArrow("status")}</th>
+                  <th className="sortable" onClick={() => toggleSort("priority")}>Priority{sortArrow("priority")}</th>
+                  <th className="sortable" onClick={() => toggleSort("due")}>Due{sortArrow("due")}</th>
+                  <th className="sortable" onClick={() => toggleSort("added")}>Added{sortArrow("added")}</th>
                   <th style={{ textAlign: "center" }}>Notes</th>
                 </tr>
               </thead>
               <tbody>
-                {visible.map((t) => (
+                {visibleSorted.map((t) => (
                   <tr key={t.id} draggable
                     onDragStart={() => setDraggedId(t.id)} onDragEnd={() => setDraggedId(null)}
                     onDragOver={(e) => {
@@ -472,6 +513,9 @@ export default function App() {
                     <td onClick={(e) => e.stopPropagation()}>
                       <input type="date" className="cell-sel" value={t.due || ""} onChange={(e) => patch(t.id, { due: e.target.value })}
                         style={{ color: isOverdue(t) ? "#BB4A2E" : (t.due ? CHARCOAL : MUTED), fontWeight: isOverdue(t) ? 700 : 500 }} />
+                    </td>
+                    <td>
+                      <span style={{ fontSize: 12.5, color: MUTED, whiteSpace: "nowrap" }}>{fmtStamp(t.createdAt)}</span>
                     </td>
                     <td style={{ textAlign: "center" }}>
                       {t.comments?.length ? <CommentBadge count={t.comments.length} big /> : <span style={{ color: "#C4CACB" }}>—</span>}
@@ -756,6 +800,8 @@ const styleSheet = `
   .tbl { width:100%; border-collapse:collapse; min-width:720px; }
   .tbl thead th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:${MUTED};
     font-weight:700; padding:12px 14px; border-bottom:2px solid ${HAIR}; background:#FAFAFA; white-space:nowrap; }
+  .tbl thead th.sortable { cursor:pointer; user-select:none; }
+  .tbl thead th.sortable:hover { color:${ORANGE}; background:#F3F4F4; }
   .tbl tbody tr { border-bottom:1px solid #EEF0F0; cursor:grab; transition:background .12s; }
   .tbl tbody tr:active { cursor:grabbing; }
   .tbl tbody tr:hover { background:#FBF6F3; }
