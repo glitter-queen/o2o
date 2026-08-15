@@ -344,7 +344,7 @@ export default function App() {
                 onDragOver={(e) => { e.preventDefault(); setDragOverCol(col.id); }}
                 onDragLeave={() => setDragOverCol((c) => (c === col.id ? null : c))}
                 onDrop={() => { if (draggedId) moveToEnd(draggedId, col.id); setDraggedId(null); setDragOverCol(null); }}>
-                <div className="col-head">
+                <div className="col-head" style={col.id === "done" ? { background: "#CFE6D6" } : undefined}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <span style={{ width: 9, height: 9, borderRadius: 3, background: col.color }} />
                     <span style={{ fontWeight: 700, fontSize: 12.5, letterSpacing: ".4px", textTransform: "uppercase" }}>{col.label}</span>
@@ -363,6 +363,7 @@ export default function App() {
                       }}
                       onClick={() => setEditingId(t.id)}
                       style={{
+                        background: t.status === "done" ? "#F0F8F2" : CARD,
                         border: t.urgent ? "1.5px solid #C0392B" : `1px solid ${HAIR}`,
                         borderLeft: `3px solid ${CATEGORIES[t.category].color}`,
                         boxShadow: t.urgent
@@ -462,13 +463,15 @@ export default function App() {
                         {STATUSES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
                       </select>
                     </td>
-                    <td>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: PRIORITIES[t.priority].color }}>{PRIORITIES[t.priority].label}</span>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <select className="cell-sel" value={t.priority} onChange={(e) => patch(t.id, { priority: e.target.value })}
+                        style={{ color: PRIORITIES[t.priority].color, fontWeight: 700 }}>
+                        {Object.keys(PRIORITIES).map((k) => <option key={k} value={k}>{PRIORITIES[k].label}</option>)}
+                      </select>
                     </td>
-                    <td>
-                      <span style={{ fontSize: 12.5, color: isOverdue(t) ? "#BB4A2E" : MUTED, fontWeight: isOverdue(t) ? 700 : 500, whiteSpace: "nowrap" }}>
-                        {fmtDate(t.due)}
-                      </span>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <input type="date" className="cell-sel" value={t.due || ""} onChange={(e) => patch(t.id, { due: e.target.value })}
+                        style={{ color: isOverdue(t) ? "#BB4A2E" : (t.due ? CHARCOAL : MUTED), fontWeight: isOverdue(t) ? 700 : 500 }} />
                     </td>
                     <td style={{ textAlign: "center" }}>
                       {t.comments?.length ? <CommentBadge count={t.comments.length} big /> : <span style={{ color: "#C4CACB" }}>—</span>}
@@ -718,7 +721,7 @@ const styleSheet = `
   .sel.small { padding:6px 8px; font-size:12.5px; }
   .clear-btn { background:transparent; border:none; color:${ORANGE}; font-size:12.5px; cursor:pointer; font-weight:600; }
 
-  .board { display:flex; gap:14px; padding:12px 22px 40px; overflow-x:auto; align-items:flex-start; }
+  .board { display:flex; gap:14px; padding:16px 22px 40px; overflow-x:auto; align-items:flex-start; background:#2A3A3D; }
   .column { background:#ECEEED; border-radius:12px; min-width:270px; max-width:270px; flex-shrink:0; display:flex; flex-direction:column; max-height:calc(100vh - 210px); }
   .column.over { outline:2px dashed ${ORANGE}; outline-offset:-2px; background:#E8EAE9; }
   .col-head { display:flex; align-items:center; justify-content:space-between; padding:12px 13px 8px; }
