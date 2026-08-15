@@ -5,6 +5,7 @@ import {
   Paperclip, Pencil, Check, BookOpen, Flag, ChevronDown, ChevronRight
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
+import { Link } from "react-router-dom";
 
 const BOARD_ID = "main";
 
@@ -149,7 +150,7 @@ function CommentBadge({ count, big }) {
   );
 }
 
-export default function App() {
+export default function CommandCenter() {
   const [tasks, setTasks] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState("board");
@@ -335,9 +336,11 @@ export default function App() {
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <Link to="/" className="ghost-btn" style={{ textDecoration: "none" }} title="Back to Launchpad">← Launchpad</Link>
             <div className="toggle">
               <button className={"tog " + (view === "board" ? "on" : "")} onClick={() => setView("board")}><LayoutGrid size={14} /> Board</button>
-              <button className={"tog " + (view === "list" ? "on" : "")} onClick={() => setView("list")}><ListIcon size={14} /> List</button>
+              <button className={"tog " + (view === "open" ? "on" : "")} onClick={() => setView("open")}><ListIcon size={14} /> Open Tasks</button>
+              <button className={"tog " + (view === "completed" ? "on" : "")} onClick={() => setView("completed")}><Check size={14} /> Completed</button>
               <button className={"tog " + (view === "ref" ? "on" : "")} onClick={() => setView("ref")}><BookOpen size={14} /> Reference</button>
             </div>
             <button className="ghost-btn" onClick={exportJSON} title="Download a backup"><Download size={15} /></button>
@@ -451,8 +454,8 @@ export default function App() {
         </div>
       )}
 
-      {/* ---------- LIST VIEW ---------- */}
-      {view === "list" && (
+      {/* ---------- LIST VIEW (Open Tasks / Completed) ---------- */}
+      {(view === "open" || view === "completed") && (
         <div style={{ padding: "10px 22px 44px" }}>
           <div className="table-wrap">
             <table className="tbl">
@@ -468,7 +471,7 @@ export default function App() {
                 </tr>
               </thead>
               <tbody>
-                {visibleSorted.map((t) => (
+                {visibleSorted.filter((t) => (view === "completed" ? t.status === "done" : t.status !== "done")).map((t) => (
                   <tr key={t.id} draggable
                     onDragStart={() => setDraggedId(t.id)} onDragEnd={() => setDraggedId(null)}
                     onDragOver={(e) => {
@@ -524,7 +527,11 @@ export default function App() {
                 ))}
               </tbody>
             </table>
-            {visible.length === 0 && <div style={{ textAlign: "center", color: MUTED, padding: 30 }}>No tasks match your filters.</div>}
+            {visibleSorted.filter((t) => (view === "completed" ? t.status === "done" : t.status !== "done")).length === 0 && (
+              <div style={{ textAlign: "center", color: MUTED, padding: 30 }}>
+                {view === "completed" ? "No completed tasks yet." : "No open tasks — nice work."}
+              </div>
+            )}
           </div>
         </div>
       )}
