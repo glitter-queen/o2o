@@ -721,7 +721,7 @@ const styleSheet = `
   .sel.small { padding:6px 8px; font-size:12.5px; }
   .clear-btn { background:transparent; border:none; color:${ORANGE}; font-size:12.5px; cursor:pointer; font-weight:600; }
 
-  .board { display:flex; gap:14px; padding:16px 22px 40px; overflow-x:auto; align-items:flex-start; background:#2A3A3D; }
+  .board { display:flex; gap:14px; padding:16px 22px 40px; overflow-x:auto; align-items:flex-start; background:#2A3A3D; min-height:calc(100vh - 150px); }
   .column { background:#ECEEED; border-radius:12px; min-width:270px; max-width:270px; flex-shrink:0; display:flex; flex-direction:column; max-height:calc(100vh - 210px); }
   .column.over { outline:2px dashed ${ORANGE}; outline-offset:-2px; background:#E8EAE9; }
   .col-head { display:flex; align-items:center; justify-content:space-between; padding:12px 13px 8px; }
