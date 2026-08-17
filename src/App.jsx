@@ -163,6 +163,7 @@ export default function CommandCenter() {
   const [sortBy, setSortBy] = useState("due");   // "task" | "owner" | "status" | "priority" | "due" | "added"
   const [sortDir, setSortDir] = useState("asc"); // "asc" | "desc"
   const [doneCollapsed, setDoneCollapsed] = useState(false);
+  const [cardsCollapsed, setCardsCollapsed] = useState(false);
   const fileRef = useRef(null);
   const [saveState, setSaveState] = useState("saved"); // "saved" | "saving" | "error"
   const saveTimer = useRef(null);
@@ -282,6 +283,15 @@ export default function CommandCenter() {
   const fmtDate = (d) => d ? new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—";
   const fmtStamp = (ms) => ms ? new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—";
 
+  // Board column ordering: urgent first, then soonest due, then first created.
+  const boardSort = (a, b) => {
+    if (!!a.urgent !== !!b.urgent) return a.urgent ? -1 : 1;
+    const ad = a.due ? new Date(a.due).getTime() : Infinity;
+    const bd = b.due ? new Date(b.due).getTime() : Infinity;
+    if (ad !== bd) return ad - bd;
+    return (a.createdAt || 0) - (b.createdAt || 0);
+  };
+
   // Sorted copy for List view. Empty due dates sort to the bottom.
   const STATUS_ORDER = STATUSES.reduce((m, s, i) => ((m[s.id] = i), m), {});
   const PRIO_ORDER = { high: 0, med: 1, low: 2 };
@@ -367,18 +377,23 @@ export default function CommandCenter() {
         {(fAssignee !== "all" || fCategory !== "all" || search) && (
           <button className="clear-btn" onClick={() => { setFAssignee("all"); setFCategory("all"); setSearch(""); }}>Clear</button>
         )}
+        {view === "board" && (
+          <button className="collapse-all" onClick={() => setCardsCollapsed((v) => !v)} style={{ marginLeft: "auto" }}>
+            {cardsCollapsed ? "⤢ Expand all" : "⤡ Collapse all"}
+          </button>
+        )}
       </div>
 
       {/* ---------- BOARD VIEW ---------- */}
       {view === "board" && (
         <div className="board">
           {STATUSES.map((col) => {
-            const items = visible.filter((t) => t.status === col.id);
+            const items = visible.filter((t) => t.status === col.id).sort(boardSort);
             return (
               <div key={col.id} className={"column" + (dragOverCol === col.id ? " over" : "")}
                 onDragOver={(e) => { e.preventDefault(); setDragOverCol(col.id); }}
                 onDragLeave={() => setDragOverCol((c) => (c === col.id ? null : c))}
-                onDrop={() => { if (draggedId) moveToEnd(draggedId, col.id); setDraggedId(null); setDragOverCol(null); }}>
+                onDrop={() => { if (draggedId) patch(draggedId, { status: col.id }); setDraggedId(null); setDragOverCol(null); }}>
                 <div className="col-head" style={col.id === "done" ? { background: "#BFDDC8" } : undefined}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <span style={{ width: 9, height: 9, borderRadius: 3, background: col.color }} />
@@ -396,13 +411,8 @@ export default function CommandCenter() {
                 {!(col.id === "done" && doneCollapsed) && (
                 <div className="col-body">
                   {items.map((t) => (
-                    <div key={t.id} className="card" draggable
+                    <div key={t.id} className={"card" + (cardsCollapsed ? " collapsed" : "")} draggable
                       onDragStart={() => setDraggedId(t.id)} onDragEnd={() => setDraggedId(null)}
-                      onDragOver={(e) => {
-                        e.preventDefault(); e.stopPropagation();
-                        const r = e.currentTarget.getBoundingClientRect();
-                        reorderTo(draggedId, t.id, e.clientY - r.top > r.height / 2, true);
-                      }}
                       onClick={() => setEditingId(t.id)}
                       style={{
                         background: t.status === "done" ? "#CFE6D6" : CARD,
@@ -411,38 +421,59 @@ export default function CommandCenter() {
                         boxShadow: t.urgent
                           ? "0 0 0 2px rgba(192,57,43,.30), 0 1px 2px rgba(42,58,61,.05)"
                           : (t.comments?.length ? "0 0 0 1.5px rgba(221,95,42,.35), 0 1px 2px rgba(42,58,61,.05)" : "0 1px 2px rgba(42,58,61,.05)") }}>
-                      {t.comments?.length > 0 && (
-                        <div style={{ position: "absolute", top: -9, right: -6 }}><CommentBadge count={t.comments.length} big /></div>
-                      )}
-                      {t.urgent && (
-                        <span className="urgent-pill"><Flag size={11} strokeWidth={2.6} /> URGENT</span>
-                      )}
-                      <span style={{ fontWeight: 600, fontSize: 13.5, lineHeight: 1.35, paddingRight: t.comments?.length ? 34 : 0, display: "block", marginTop: t.urgent ? 6 : 0 }}>
-                        {t.title || "Untitled task"}
-                      </span>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 9, alignItems: "center" }}>
-                        <span className="chip" style={{ color: CATEGORIES[t.category].color, borderColor: CATEGORIES[t.category].color + "44" }}>
-                          {CATEGORIES[t.category].label}
-                        </span>
-                        <span className="pri-dot" style={{ background: PRIORITIES[t.priority].color }} title={PRIORITIES[t.priority].label + " priority"} />
-                        {t.due && (
-                          <span className="due" style={{ color: isOverdue(t) ? "#BB4A2E" : MUTED, fontWeight: isOverdue(t) ? 700 : 500 }}>
-                            <CalIcon size={11} /> {fmtDate(t.due)}
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
+
+                      {cardsCollapsed ? (
+                        /* ---- Collapsed: name + due + urgent only ---- */
                         <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                          <span className="avatar" style={{ background: ASSIGNEES[t.assignee].color }}>{t.assignee[0]}</span>
-                          <button className={"flag-btn" + (t.urgent ? " on" : "")} onClick={(e) => { e.stopPropagation(); toggleUrgent(t.id); }}
-                            title={t.urgent ? "Remove urgent" : "Mark urgent"}><Flag size={13} /></button>
+                          {t.urgent && <Flag size={12} strokeWidth={2.6} color="#C0392B" style={{ flexShrink: 0 }} />}
+                          <span style={{ fontWeight: 600, fontSize: 13, lineHeight: 1.3, flex: 1, minWidth: 0 }}>{t.title || "Untitled task"}</span>
+                          {t.due && (
+                            <span style={{ fontSize: 11.5, fontWeight: isOverdue(t) ? 700 : 500, color: isOverdue(t) ? "#BB4A2E" : MUTED, whiteSpace: "nowrap", flexShrink: 0 }}>
+                              {fmtDate(t.due)}
+                            </span>
+                          )}
                         </div>
-                        {t.assignee !== "Nick" && (
-                          <button className="pass-btn" onClick={(e) => { e.stopPropagation(); passToNick(t.id); }} title="Set to Pending · Nick and assign to Nick">
-                            <ArrowRight size={12} /> Nick
-                          </button>
-                        )}
-                      </div>
+                      ) : (
+                        /* ---- Expanded: full card ---- */
+                        <>
+                          {t.comments?.length > 0 && (
+                            <div style={{ position: "absolute", top: -9, right: -6 }}><CommentBadge count={t.comments.length} big /></div>
+                          )}
+                          {t.urgent && (
+                            <span className="urgent-pill"><Flag size={11} strokeWidth={2.6} /> URGENT</span>
+                          )}
+                          <span style={{ fontWeight: 600, fontSize: 13.5, lineHeight: 1.35, paddingRight: t.comments?.length ? 34 : 0, display: "block", marginTop: t.urgent ? 6 : 0 }}>
+                            {t.title || "Untitled task"}
+                          </span>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 9, alignItems: "center" }}>
+                            <span className="chip" style={{ color: CATEGORIES[t.category].color, borderColor: CATEGORIES[t.category].color + "44" }}>
+                              {CATEGORIES[t.category].label}
+                            </span>
+                            <span className="pri-dot" style={{ background: PRIORITIES[t.priority].color }} title={PRIORITIES[t.priority].label + " priority"} />
+                          </div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 8, fontSize: 11, color: MUTED }}>
+                            <span style={{ display: "flex", alignItems: "center", gap: 3, color: isOverdue(t) ? "#BB4A2E" : MUTED, fontWeight: isOverdue(t) ? 700 : 500 }}>
+                              <CalIcon size={11} /> Due {t.due ? fmtDate(t.due) : "—"}
+                            </span>
+                            <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                              Added {fmtStamp(t.createdAt)}
+                            </span>
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 11, gap: 8 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                              <span className="avatar" style={{ background: ASSIGNEES[t.assignee].color }}>{t.assignee[0]}</span>
+                              <button className={"flag-btn" + (t.urgent ? " on" : "")} onClick={(e) => { e.stopPropagation(); toggleUrgent(t.id); }}
+                                title={t.urgent ? "Remove urgent" : "Mark urgent"}><Flag size={13} /></button>
+                            </div>
+                            <select className="card-status-sel" value={t.status}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => { e.stopPropagation(); patch(t.id, { status: e.target.value }); }}
+                              style={{ color: S(t.status).color, borderColor: S(t.status).color + "66", background: S(t.status).color + "12" }}>
+                              {STATUSES.map((s) => <option key={s.id} value={s.id} style={{ color: CHARCOAL }}>{s.label}</option>)}
+                            </select>
+                          </div>
+                        </>
+                      )}
                     </div>
                   ))}
                   {items.length === 0 && <div className="empty">Drop tasks here</div>}
@@ -571,8 +602,10 @@ export default function CommandCenter() {
         <div className="overlay" onClick={() => setEditingId(null)}>
           <div className="sheet" onClick={(e) => e.stopPropagation()}>
             <div className="sheet-head">
-              <input className="title-input" value={editing.title} placeholder="Task title"
-                onChange={(e) => patch(editing.id, { title: e.target.value })} autoFocus={!editing.title} />
+              <textarea className="title-input" value={editing.title} placeholder="Task title" rows={1}
+                ref={(el) => { if (el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; } }}
+                onChange={(e) => { patch(editing.id, { title: e.target.value }); e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; }}
+                autoFocus={!editing.title} />
               <button className="icon-btn" onClick={() => setEditingId(null)}><X size={18} /></button>
             </div>
             <div className="field-grid">
@@ -784,6 +817,12 @@ const styleSheet = `
     cursor:grab; transition:box-shadow .15s, transform .1s; }
   .card:hover { transform:translateY(-1px); }
   .card:active { cursor:grabbing; }
+  .card.collapsed { padding:9px 11px; }
+  .card-status-sel { border:1.5px solid; border-radius:7px; padding:4px 6px; font-size:11.5px; font-weight:700;
+    font-family:inherit; outline:none; cursor:pointer; max-width:130px; }
+  .collapse-all { background:#fff; border:1px solid ${HAIR}; border-radius:8px; padding:7px 12px; font-size:12.5px;
+    font-weight:600; color:${CHARCOAL}; cursor:pointer; }
+  .collapse-all:hover { border-color:${ORANGE}; color:${ORANGE}; }
   .urgent-pill { display:inline-flex; align-items:center; gap:4px; background:#C0392B; color:#fff; font-size:10px;
     font-weight:800; letter-spacing:.5px; border-radius:5px; padding:3px 7px; }
   .urgent-pill.sm { padding:2px 6px; font-size:9.5px; flex-shrink:0; }
@@ -820,7 +859,7 @@ const styleSheet = `
   .overlay { position:fixed; inset:0; background:rgba(30,40,42,.45); display:flex; justify-content:center; align-items:flex-start; padding:32px 16px; z-index:50; overflow-y:auto; backdrop-filter:blur(2px); }
   .sheet { background:#fff; border-radius:14px; width:100%; max-width:560px; padding:20px 22px 18px; box-shadow:0 20px 60px rgba(0,0,0,.25); }
   .sheet-head { display:flex; gap:10px; align-items:flex-start; margin-bottom:16px; }
-  .title-input { flex:1; border:none; outline:none; font-size:19px; font-weight:700; color:${CHARCOAL}; font-family:inherit; border-bottom:2px solid transparent; padding-bottom:4px; }
+  .title-input { flex:1; border:none; outline:none; font-size:19px; font-weight:700; color:${CHARCOAL}; font-family:inherit; border-bottom:2px solid transparent; padding-bottom:4px; resize:none; line-height:1.3; overflow:hidden; min-height:28px; }
   .title-input:focus { border-bottom-color:${ORANGE}; }
   .icon-btn { background:#F1F3F3; border:none; border-radius:8px; padding:6px; cursor:pointer; color:${MUTED}; }
   .icon-btn:hover { background:#E4E7E7; }
