@@ -1,20 +1,21 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "./supabaseClient";
+import { marked } from "marked";
+
+marked.setOptions({ breaks: true, gfm: true });
+
+// Render markdown -> HTML, and auto-link bare URLs not already in a md link.
+function mdToHtml(text) {
+  const raw = String(text || "");
+  const linked = raw.replace(/(^|[^\](])((?:https?:\/\/)[^\s)]+)/g, (m, pre, url) => `${pre}[${url}](${url})`);
+  return marked.parse(linked);
+}
 
 /* ---------- helpers ---------- */
 const DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const uid = () => String(Date.now()) + Math.random().toString(16).slice(2, 6);
-
-const isUrl = (s) => /^https?:\/\//i.test(s);
-function linkify(text) {
-  return String(text || "").split(/(https?:\/\/[^\s]+)/gi).map((part, i) =>
-    isUrl(part)
-      ? <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="lp-link">{part}</a>
-      : <span key={i}>{part}</span>
-  );
-}
 
 const TAGS = ["Onboarding", "Client", "Process", "Question", "Win"];
 
@@ -254,7 +255,7 @@ export default function Launchpad() {
                   <button className="lp-kill" onClick={() => deleteRecording(activeRecObj.id)} title="Delete recording">Delete</button>
                 </div>
               </header>
-              <div className="lp-rec-notes">{linkify(activeRecObj.notes)}</div>
+              <div className="lp-rec-notes lp-md" dangerouslySetInnerHTML={{ __html: mdToHtml(activeRecObj.notes) }} />
             </article>
           )}
           {recsLoaded && recs.length === 0 && <p className="lp-empty">No recordings yet. Add your first with “+ Add recording”.</p>}
@@ -293,7 +294,7 @@ export default function Launchpad() {
             {filteredNotes.map((e) => (
               <li key={e.id}>
                 <div className="lp-stamp">{stamp(e.created_at)}{e.tag && <div className="lp-tag">{e.tag}</div>}</div>
-                <div className="lp-entry-text">{linkify(e.text)}</div>
+                <div className="lp-entry-text lp-md" dangerouslySetInnerHTML={{ __html: mdToHtml(e.text) }} />
                 <button className="lp-kill" onClick={() => deleteNote(e.id)}>Delete</button>
               </li>
             ))}
@@ -452,6 +453,32 @@ const LP_CSS = `
   .lp-empty{padding:26px 0 8px;color:var(--muted);font-family:var(--cond);font-size:18px;letter-spacing:1.2px;text-transform:uppercase}
   .lp-link{color:var(--orange);font-weight:600;text-decoration:underline;overflow-wrap:anywhere;word-break:break-word}
   .lp-link:hover{color:var(--white)}
+  .lp-md{color:#D5E0E1;line-height:1.6;word-break:break-word}
+  .lp-md h1,.lp-md h2,.lp-md h3,.lp-md h4{font-family:var(--cond);font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--orange);margin:18px 0 8px;line-height:1.2}
+  .lp-md h1{font-size:19px}
+  .lp-md h2{font-size:17px}
+  .lp-md h3,.lp-md h4{font-size:15px;letter-spacing:2px}
+  .lp-md :first-child{margin-top:0}
+  .lp-md p{margin:0 0 10px}
+  .lp-md strong{color:var(--white);font-weight:700}
+  .lp-md em{color:#E8EFF0}
+  .lp-md a{color:var(--orange);font-weight:600;text-decoration:underline;overflow-wrap:anywhere;word-break:break-word}
+  .lp-md a:hover{color:var(--white)}
+  .lp-md ul,.lp-md ol{margin:0 0 12px;padding-left:4px;list-style:none;display:flex;flex-direction:column;gap:8px}
+  .lp-md ul li{position:relative;padding-left:22px;line-height:1.5}
+  .lp-md ul li::before{content:"";position:absolute;left:0;top:8px;width:8px;height:8px;background:var(--orange);clip-path:polygon(0 0,100% 0,100% 100%)}
+  .lp-md ol{counter-reset:mdli}
+  .lp-md ol li{position:relative;padding-left:26px;counter-increment:mdli}
+  .lp-md ol li::before{content:counter(mdli);position:absolute;left:0;top:0;color:var(--orange);font-family:var(--cond);font-weight:700}
+  .lp-md code{background:var(--slate-900);border:1px solid var(--slate-700);padding:1px 5px;font-size:.9em;border-radius:3px}
+  .lp-md blockquote{margin:0 0 12px;padding:4px 0 4px 14px;border-left:3px solid var(--orange);color:var(--muted)}
+  .lp-md hr{border:none;border-top:2px solid var(--slate-700);margin:16px 0}
+  .lp-md table{border-collapse:collapse;width:100%;margin:0 0 14px;font-size:14px}
+  .lp-md th,.lp-md td{border:1px solid var(--slate-700);padding:8px 11px;text-align:left;vertical-align:top}
+  .lp-md th{background:var(--slate-900);color:var(--orange);font-family:var(--cond);font-weight:700;letter-spacing:1px;text-transform:uppercase;font-size:13px}
+  .lp-md tr:nth-child(even) td{background:rgba(255,255,255,.02)}
+  .lp-md pre{background:var(--slate-900);border:1px solid var(--slate-700);padding:12px;overflow-x:auto;margin:0 0 12px}
+  .lp-md pre code{border:none;background:none;padding:0}
   .lp-workspace{position:relative}
   .lp-frame-wrap{background:var(--slate-800);border:2px solid var(--slate-700);border-top:none;padding:10px;height:74vh;min-height:420px}
   .lp-frame-wrap iframe{width:100%;height:100%;border:none;background:var(--slate-900);display:block}
