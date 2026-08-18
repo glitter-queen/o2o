@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Plus, X, MessageSquare, Calendar as CalIcon, ArrowRight, Download,
   Upload, Search, Trash2, Send, CornerUpLeft, LayoutGrid, List as ListIcon,
-  Paperclip, Pencil, Check, BookOpen, Flag, ChevronDown, ChevronRight
+  Paperclip, Pencil, Check, BookOpen, Flag, ChevronDown, ChevronRight, Activity
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import { Link } from "react-router-dom";
@@ -164,6 +164,7 @@ export default function CommandCenter() {
   const [sortDir, setSortDir] = useState("asc"); // "asc" | "desc"
   const [doneCollapsed, setDoneCollapsed] = useState(false);
   const [cardsCollapsed, setCardsCollapsed] = useState(false);
+  const [activity, setActivity] = useState([]);
   const fileRef = useRef(null);
   const [saveState, setSaveState] = useState("saved"); // "saved" | "saving" | "error"
   const saveTimer = useRef(null);
@@ -186,6 +187,17 @@ export default function CommandCenter() {
         setSaveState("error");
       }
       setLoaded(true);
+    })();
+  }, []);
+
+  // Load the activity log (most recent first)
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data, error } = await supabase.from("activity").select("*").order("created_at", { ascending: false }).limit(500);
+        if (error) throw error;
+        setActivity(data || []);
+      } catch (e) { console.error("Activity load failed:", e); }
     })();
   }, []);
 
@@ -212,12 +224,24 @@ export default function CommandCenter() {
     const next = { ...t, ...changes };
     // Stamp / clear the completion date when status crosses the "done" line.
     if (changes.status !== undefined && changes.status !== t.status) {
-      if (changes.status === "done") next.completedAt = next.completedAt || Date.now();
-      else next.completedAt = null;
+      if (changes.status === "done") {
+        next.completedAt = next.completedAt || Date.now();
+        logEvent(next, "completed", "");
+      } else {
+        next.completedAt = null;
+        logEvent(next, "moved", `${S(t.status).label} → ${S(changes.status).label}`);
+      }
     }
     return next;
   }));
   const remove = (id) => { setTasks((ts) => ts.filter((t) => t.id !== id)); setEditingId(null); };
+
+  // Activity log — records the events that matter for the daily recap.
+  const logEvent = (task, kind, detail) => {
+    const ev = { id: uid(), task_id: task.id, task_title: task.title || "Untitled task", kind, detail: detail || "", created_at: new Date().toISOString() };
+    setActivity((a) => [ev, ...a]);
+    (async () => { try { await supabase.from("activity").insert(ev); } catch (e) { console.error(e); } })();
+  };
   const toggleUrgent = (id) => setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, urgent: !t.urgent } : t)));
 
   // Move dragged card to sit before/after a target card. adoptStatus=true also changes its column.
@@ -255,8 +279,12 @@ export default function CommandCenter() {
   const passToNick = (id) => patch(id, { assignee: "Nick", status: "pending_nick" });
   const addComment = (id, text, attachment) => {
     if (!(text && text.trim()) && !attachment) return;
-    setTasks((ts) => ts.map((t) => t.id === id
-      ? { ...t, comments: [...(t.comments || []), { text: (text || "").trim(), attachment: attachment || null, author: "Ashley", ts: Date.now() }] } : t));
+    setTasks((ts) => ts.map((t) => {
+      if (t.id !== id) return t;
+      const detail = (text && text.trim()) ? text.trim() : (attachment ? `📎 ${attachment.name}` : "");
+      logEvent(t, "commented", detail);
+      return { ...t, comments: [...(t.comments || []), { text: (text || "").trim(), attachment: attachment || null, author: "Ashley", ts: Date.now() }] };
+    }));
   };
   const updateComment = (id, idx, text) =>
     setTasks((ts) => ts.map((t) => t.id === id
@@ -330,6 +358,43 @@ export default function CommandCenter() {
   };
   const sortArrow = (col) => (sortBy === col ? (sortDir === "asc" ? " ▲" : " ▼") : "");
 
+  // ----- Activity log helpers -----
+  const KIND_META = {
+    completed: { label: "Completed", color: "#3E8E5A", icon: "✅" },
+    moved:     { label: "Moved",     color: "#46626C", icon: "➡️" },
+    commented: { label: "Comment",   color: ORANGE,    icon: "💬" },
+  };
+  const dayKey = (iso) => { const d = new Date(iso); return d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate(); };
+  const dayLabel = (iso) => {
+    const d = new Date(iso); const t = new Date();
+    const y = new Date(); y.setDate(t.getDate() - 1);
+    if (dayKey(iso) === dayKey(t.toISOString())) return "Today";
+    if (dayKey(iso) === dayKey(y.toISOString())) return "Yesterday";
+    return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+  };
+  const evTime = (iso) => new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  // group activity by day (already sorted newest-first)
+  const activityByDay = activity.reduce((acc, ev) => {
+    const k = dayKey(ev.created_at);
+    (acc[k] = acc[k] || { label: dayLabel(ev.created_at), items: [] }).items.push(ev);
+    return acc;
+  }, {});
+  const copyTodaysRecap = () => {
+    const t = new Date();
+    const today = activity.filter((ev) => dayKey(ev.created_at) === dayKey(t.toISOString()));
+    const completed = today.filter((e) => e.kind === "completed");
+    const moved = today.filter((e) => e.kind === "moved");
+    const commented = today.filter((e) => e.kind === "commented");
+    const lines = [`EOD Recap — ${t.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}`, ""];
+    if (completed.length) { lines.push(`✅ Completed (${completed.length}):`); completed.forEach((e) => lines.push(`  • ${e.task_title}`)); lines.push(""); }
+    if (moved.length) { lines.push(`➡️ Moved (${moved.length}):`); moved.forEach((e) => lines.push(`  • ${e.task_title} — ${e.detail}`)); lines.push(""); }
+    if (commented.length) { lines.push(`💬 Notes added (${commented.length}):`); commented.forEach((e) => lines.push(`  • ${e.task_title}`)); lines.push(""); }
+    if (!today.length) lines.push("No tracked activity today yet.");
+    const text = lines.join("\n").trim();
+    if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
+    return text;
+  };
+
   return (
     <div style={{ background: BG, minHeight: "100vh", fontFamily: "'Segoe UI', system-ui, sans-serif", color: CHARCOAL }}>
       <style>{styleSheet}</style>
@@ -361,6 +426,7 @@ export default function CommandCenter() {
               <button className={"tog " + (view === "board" ? "on" : "")} onClick={() => setView("board")}><LayoutGrid size={14} /> Board</button>
               <button className={"tog " + (view === "open" ? "on" : "")} onClick={() => setView("open")}><ListIcon size={14} /> Open Tasks</button>
               <button className={"tog " + (view === "completed" ? "on" : "")} onClick={() => { setView("completed"); setSortBy("completed"); setSortDir("desc"); }}><Check size={14} /> Completed</button>
+              <button className={"tog " + (view === "activity" ? "on" : "")} onClick={() => setView("activity")}><Activity size={14} /> Activity</button>
               <button className={"tog " + (view === "ref" ? "on" : "")} onClick={() => setView("ref")}><BookOpen size={14} /> Reference</button>
             </div>
             <button className="ghost-btn" onClick={exportJSON} title="Download a backup"><Download size={15} /></button>
@@ -610,6 +676,41 @@ export default function CommandCenter() {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* ---------- ACTIVITY VIEW ---------- */}
+      {view === "activity" && (
+        <div style={{ padding: "12px 22px 44px", maxWidth: 860 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13, color: MUTED }}>Everything you completed, moved, or commented on — newest first.</span>
+            <button className="recap-btn" onClick={(e) => { copyTodaysRecap(); const b = e.currentTarget; const o = b.textContent; b.textContent = "Copied!"; setTimeout(() => { b.textContent = o; }, 1600); }}>
+              Copy today's recap
+            </button>
+          </div>
+          {activity.length === 0 && <div style={{ textAlign: "center", color: MUTED, padding: 40 }}>No activity logged yet. Completing, moving, or commenting on tasks will show up here.</div>}
+          {Object.keys(activityByDay).map((k) => (
+            <div key={k} style={{ marginBottom: 22 }}>
+              <div className="act-day">{activityByDay[k].label}</div>
+              <div className="act-list">
+                {activityByDay[k].items.map((ev) => (
+                  <div key={ev.id} className="act-row" onClick={() => { const t = tasks.find((x) => x.id === ev.task_id); if (t) setEditingId(t.id); }}>
+                    <span className="act-icon" style={{ background: (KIND_META[ev.kind]?.color || MUTED) + "18", color: KIND_META[ev.kind]?.color || MUTED }}>
+                      {KIND_META[ev.kind]?.icon || "•"}
+                    </span>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 13.5 }}>
+                        <span style={{ fontWeight: 700, color: KIND_META[ev.kind]?.color || CHARCOAL }}>{KIND_META[ev.kind]?.label || ev.kind}</span>
+                        <span style={{ color: CHARCOAL }}>{" "}{ev.task_title}</span>
+                      </div>
+                      {ev.detail && <div style={{ fontSize: 12, color: MUTED, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ev.kind === "moved" ? ev.detail : `“${ev.detail}”`}</div>}
+                    </div>
+                    <span style={{ fontSize: 11.5, color: MUTED, whiteSpace: "nowrap", flexShrink: 0 }}>{evTime(ev.created_at)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
@@ -914,6 +1015,14 @@ const styleSheet = `
   .ref-chip { font-size:11px; font-weight:700; border-radius:6px; padding:3px 8px; white-space:nowrap; }
   .ref-chip.cad { background:#EAF0F1; color:#46626C; }
   .ref-chip.prep { background:#FBEEE9; color:${ORANGE}; }
+  .recap-btn { background:${ORANGE}; color:#fff; border:none; border-radius:8px; padding:9px 16px; font-size:13px; font-weight:700; cursor:pointer; white-space:nowrap; }
+  .recap-btn:hover { filter:brightness(1.07); }
+  .act-day { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:1px; color:${ORANGE}; margin-bottom:8px; }
+  .act-list { background:#fff; border:1px solid ${HAIR}; border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(42,58,61,.05); }
+  .act-row { display:flex; align-items:center; gap:12px; padding:12px 15px; border-bottom:1px solid #EEF0F0; cursor:pointer; transition:background .12s; }
+  .act-row:last-child { border-bottom:none; }
+  .act-row:hover { background:#FBF6F3; }
+  .act-icon { width:30px; height:30px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; flex-shrink:0; }
   .cinput { flex:1; border:1px solid ${HAIR}; border-radius:8px; padding:9px 11px; font-size:13px; font-family:inherit; outline:none; color:${CHARCOAL}; resize:none; line-height:1.45; overflow-y:auto; min-height:38px; max-height:140px; }
   .cinput:focus { border-color:${ORANGE}; }
   .csend { background:${CHARCOAL}; color:#fff; border:none; border-radius:8px; padding:0 12px; cursor:pointer; display:flex; align-items:center; height:38px; flex-shrink:0; }
