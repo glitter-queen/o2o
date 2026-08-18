@@ -207,7 +207,16 @@ export default function CommandCenter() {
     return () => clearTimeout(saveTimer.current);
   }, [tasks, loaded, draggedId]);
 
-  const patch = (id, changes) => setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, ...changes } : t)));
+  const patch = (id, changes) => setTasks((ts) => ts.map((t) => {
+    if (t.id !== id) return t;
+    const next = { ...t, ...changes };
+    // Stamp / clear the completion date when status crosses the "done" line.
+    if (changes.status !== undefined && changes.status !== t.status) {
+      if (changes.status === "done") next.completedAt = next.completedAt || Date.now();
+      else next.completedAt = null;
+    }
+    return next;
+  }));
   const remove = (id) => { setTasks((ts) => ts.filter((t) => t.id !== id)); setEditingId(null); };
   const toggleUrgent = (id) => setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, urgent: !t.urgent } : t)));
 
@@ -302,6 +311,7 @@ export default function CommandCenter() {
       case "status": return STATUS_ORDER[t.status] ?? 99;
       case "priority": return PRIO_ORDER[t.priority] ?? 9;
       case "added": return t.createdAt || 0;
+      case "completed": return t.completedAt || 0;
       case "due":
       default: return t.due ? new Date(t.due).getTime() : Infinity; // no due date -> bottom
     }
@@ -350,7 +360,7 @@ export default function CommandCenter() {
             <div className="toggle">
               <button className={"tog " + (view === "board" ? "on" : "")} onClick={() => setView("board")}><LayoutGrid size={14} /> Board</button>
               <button className={"tog " + (view === "open" ? "on" : "")} onClick={() => setView("open")}><ListIcon size={14} /> Open Tasks</button>
-              <button className={"tog " + (view === "completed" ? "on" : "")} onClick={() => setView("completed")}><Check size={14} /> Completed</button>
+              <button className={"tog " + (view === "completed" ? "on" : "")} onClick={() => { setView("completed"); setSortBy("completed"); setSortDir("desc"); }}><Check size={14} /> Completed</button>
               <button className={"tog " + (view === "ref" ? "on" : "")} onClick={() => setView("ref")}><BookOpen size={14} /> Reference</button>
             </div>
             <button className="ghost-btn" onClick={exportJSON} title="Download a backup"><Download size={15} /></button>
@@ -498,6 +508,7 @@ export default function CommandCenter() {
                   <th className="sortable" onClick={() => toggleSort("priority")}>Priority{sortArrow("priority")}</th>
                   <th className="sortable" onClick={() => toggleSort("due")}>Due{sortArrow("due")}</th>
                   <th className="sortable" onClick={() => toggleSort("added")}>Added{sortArrow("added")}</th>
+                  {view === "completed" && <th className="sortable" onClick={() => toggleSort("completed")}>Completed{sortArrow("completed")}</th>}
                   <th style={{ textAlign: "center" }}>Notes</th>
                 </tr>
               </thead>
@@ -551,6 +562,11 @@ export default function CommandCenter() {
                     <td>
                       <span style={{ fontSize: 12.5, color: MUTED, whiteSpace: "nowrap" }}>{fmtStamp(t.createdAt)}</span>
                     </td>
+                    {view === "completed" && (
+                      <td>
+                        <span style={{ fontSize: 12.5, fontWeight: 700, color: "#3E8E5A", whiteSpace: "nowrap" }}>{fmtStamp(t.completedAt)}</span>
+                      </td>
+                    )}
                     <td style={{ textAlign: "center" }}>
                       {t.comments?.length ? <CommentBadge count={t.comments.length} big /> : <span style={{ color: "#C4CACB" }}>—</span>}
                     </td>
@@ -777,10 +793,10 @@ function CommentBox({ onSend, onAttach }) {
         <button className="attach-btn" onClick={() => fileRef.current?.click()} title="Attach a file"><Paperclip size={16} /></button>
         <input ref={fileRef} type="file" style={{ display: "none" }}
           onChange={(e) => { takeFile(e.target.files?.[0]); e.target.value = ""; }} />
-        <input className="cinput" placeholder={drag ? "Drop it here…" : "Add a note, link, or drop a file…"} value={v}
-          onChange={(e) => setV(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { onSend(v); setV(""); } }} />
-        <button className="csend" onClick={() => { onSend(v); setV(""); }}><Send size={15} /></button>
+        <textarea className="cinput" rows={1} placeholder={drag ? "Drop it here…" : "Add a note, link, or drop a file… (Shift+Enter for a new line)"} value={v}
+          onChange={(e) => { setV(e.target.value); e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 140) + "px"; }}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (v.trim()) { onSend(v); setV(""); e.target.style.height = "auto"; } } }} />
+        <button className="csend" onClick={() => { if (v.trim()) { onSend(v); setV(""); } }}><Send size={15} /></button>
       </div>
     </div>
   );
@@ -881,9 +897,9 @@ const styleSheet = `
   .edit-area { width:100%; min-height:52px; border:1px solid ${ORANGE}; border-radius:8px; padding:8px 10px; font-size:13px; font-family:inherit; outline:none; resize:vertical; line-height:1.4; color:${CHARCOAL}; }
   .attach-chip { display:inline-flex; align-items:center; gap:5px; max-width:100%; margin-top:6px; background:#fff; border:1px solid ${HAIR}; border-radius:7px; padding:5px 9px; font-size:12px; color:${CHARCOAL}; font-weight:600; text-decoration:none; }
   .attach-chip:hover { border-color:${ORANGE}; color:${ORANGE}; }
-  .drop-row { display:flex; gap:8px; margin-top:8px; align-items:center; border:1.5px dashed transparent; border-radius:10px; padding:2px; transition:border-color .12s, background .12s; }
+  .drop-row { display:flex; gap:8px; margin-top:8px; align-items:flex-end; border:1.5px dashed transparent; border-radius:10px; padding:2px; transition:border-color .12s, background .12s; }
   .drop-row.over { border-color:${ORANGE}; background:#FBF1EC; }
-  .attach-btn { background:#F1F3F3; border:1px solid ${HAIR}; border-radius:8px; padding:8px; cursor:pointer; color:${MUTED}; display:flex; align-items:center; }
+  .attach-btn { background:#F1F3F3; border:1px solid ${HAIR}; border-radius:8px; padding:8px; cursor:pointer; color:${MUTED}; display:flex; align-items:center; height:38px; flex-shrink:0; }
   .attach-btn:hover { color:${ORANGE}; border-color:${ORANGE}; }
   .warn { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; background:#FBEEE9; border:1px solid #E7C4BB; color:#8A3A22; font-size:12px; line-height:1.4; padding:8px 10px; border-radius:8px; margin-top:8px; }
   .warn button { background:transparent; border:none; cursor:pointer; color:#8A3A22; flex-shrink:0; padding:0; }
@@ -898,9 +914,9 @@ const styleSheet = `
   .ref-chip { font-size:11px; font-weight:700; border-radius:6px; padding:3px 8px; white-space:nowrap; }
   .ref-chip.cad { background:#EAF0F1; color:#46626C; }
   .ref-chip.prep { background:#FBEEE9; color:${ORANGE}; }
-  .cinput { flex:1; border:1px solid ${HAIR}; border-radius:8px; padding:9px 11px; font-size:13px; font-family:inherit; outline:none; color:${CHARCOAL}; }
+  .cinput { flex:1; border:1px solid ${HAIR}; border-radius:8px; padding:9px 11px; font-size:13px; font-family:inherit; outline:none; color:${CHARCOAL}; resize:none; line-height:1.45; overflow-y:auto; min-height:38px; max-height:140px; }
   .cinput:focus { border-color:${ORANGE}; }
-  .csend { background:${CHARCOAL}; color:#fff; border:none; border-radius:8px; padding:0 12px; cursor:pointer; display:flex; align-items:center; }
+  .csend { background:${CHARCOAL}; color:#fff; border:none; border-radius:8px; padding:0 12px; cursor:pointer; display:flex; align-items:center; height:38px; flex-shrink:0; }
   .csend:hover { background:${ORANGE}; }
   .sheet-foot { display:flex; justify-content:space-between; align-items:center; margin-top:20px; padding-top:14px; border-top:1px solid ${HAIR}; }
   .del-btn { display:flex; align-items:center; gap:6px; background:transparent; border:none; color:#BB4A2E; font-size:13px; cursor:pointer; font-weight:600; }
