@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Plus, X, MessageSquare, Calendar as CalIcon, ArrowRight, Download,
   Upload, Search, Trash2, Send, CornerUpLeft, LayoutGrid, List as ListIcon,
-  Paperclip, Pencil, Check, BookOpen, Flag, ChevronDown, ChevronRight, Activity
+  Paperclip, Pencil, Check, BookOpen, Flag, ChevronDown, ChevronRight, Activity, Clock
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import { Link } from "react-router-dom";
@@ -168,9 +168,17 @@ export default function CommandCenter() {
   const [expandedDays, setExpandedDays] = useState({});
   const fileRef = useRef(null);
   const [saveState, setSaveState] = useState("saved"); // "saved" | "saving" | "error"
+  const [loadOk, setLoadOk] = useState(false);         // true only after a clean load — gates saving
+  const [loadFailed, setLoadFailed] = useState(false); // show read-only banner
+  const [showHistory, setShowHistory] = useState(false);
+  const [snapshots, setSnapshots] = useState([]);
   const saveTimer = useRef(null);
+  const tasksRef = useRef([]);
+  const dirtyRef = useRef(false);
+  tasksRef.current = tasks;
 
-  // Load the board from Supabase (seed it on first run)
+  // Load the board from Supabase. CRITICAL: only enable saving after a clean load,
+  // so a failed/stale load can never overwrite your good data.
   useEffect(() => {
     (async () => {
       try {
@@ -178,13 +186,22 @@ export default function CommandCenter() {
         if (error) throw error;
         if (data && Array.isArray(data.data) && data.data.length) {
           setTasks(data.data);
+          setLoadOk(true);           // clean load with real data -> safe to save
+          maybeBaselineSnapshot(data.data);
+        } else if (data && Array.isArray(data.data)) {
+          // Row exists but board is empty. Do NOT auto-seed over it — could be a real (if empty) state.
+          setTasks([]);
+          setLoadOk(true);
         } else {
+          // No row at all -> genuine first run. Seed it.
           setTasks(SEED);
           await supabase.from("boards").upsert({ id: BOARD_ID, data: SEED, updated_at: new Date().toISOString() });
+          setLoadOk(true);
         }
       } catch (e) {
         console.error("Load failed:", e);
-        setTasks(SEED); // in-memory fallback so the app still works
+        // DO NOT touch tasks and DO NOT enable saving. Go read-only.
+        setLoadFailed(true);
         setSaveState("error");
       }
       setLoaded(true);
@@ -202,9 +219,10 @@ export default function CommandCenter() {
     })();
   }, []);
 
-  // Save to Supabase — debounced, and never mid-drag
+  // Save to Supabase — debounced, never mid-drag, and NEVER before a clean load.
   useEffect(() => {
-    if (!loaded || draggedId) return;
+    if (!loaded || !loadOk || draggedId) return;
+    dirtyRef.current = true; // board changed since last snapshot
     setSaveState("saving");
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
@@ -218,7 +236,48 @@ export default function CommandCenter() {
       }
     }, 600);
     return () => clearTimeout(saveTimer.current);
-  }, [tasks, loaded, draggedId]);
+  }, [tasks, loaded, loadOk, draggedId]);
+
+  // ---- Snapshots: rolling version history for one-click recovery ----
+  const takeSnapshot = async (data) => {
+    try {
+      await supabase.from("snapshots").insert({ data, task_count: data.length });
+      const { data: rows } = await supabase.from("snapshots").select("id").order("created_at", { ascending: false });
+      if (rows && rows.length > 30) {
+        const stale = rows.slice(30).map((r) => r.id);
+        await supabase.from("snapshots").delete().in("id", stale);
+      }
+    } catch (e) { console.error("Snapshot failed:", e); }
+  };
+  // Take a baseline snapshot on load if the newest one is older than 30 min (avoids refresh-spam).
+  const maybeBaselineSnapshot = async (data) => {
+    try {
+      const { data: rows } = await supabase.from("snapshots").select("created_at").order("created_at", { ascending: false }).limit(1);
+      const newest = rows && rows[0] ? new Date(rows[0].created_at).getTime() : 0;
+      if (Date.now() - newest > 30 * 60 * 1000) { takeSnapshot(data); dirtyRef.current = false; }
+    } catch (e) { console.error(e); }
+  };
+  // Every 10 min, snapshot only if the board changed since the last one.
+  useEffect(() => {
+    if (!loadOk) return;
+    const iv = setInterval(() => {
+      if (dirtyRef.current) { dirtyRef.current = false; takeSnapshot(tasksRef.current); }
+    }, 10 * 60 * 1000);
+    return () => clearInterval(iv);
+  }, [loadOk]);
+
+  const openHistory = async () => {
+    setShowHistory(true);
+    try {
+      const { data } = await supabase.from("snapshots").select("*").order("created_at", { ascending: false }).limit(30);
+      setSnapshots(data || []);
+    } catch (e) { console.error(e); setSnapshots([]); }
+  };
+  const restoreSnapshot = (snap) => {
+    if (!Array.isArray(snap.data)) return;
+    setTasks(snap.data);       // triggers a normal save
+    setShowHistory(false);
+  };
 
   const patch = (id, changes) => setTasks((ts) => ts.map((t) => {
     if (t.id !== id) return t;
@@ -437,7 +496,8 @@ export default function CommandCenter() {
               <button className={"tog " + (view === "ref" ? "on" : "")} onClick={() => setView("ref")}><BookOpen size={14} /> Reference</button>
             </div>
             <button className="ghost-btn" onClick={exportJSON} title="Download a backup"><Download size={15} /></button>
-            <button className="ghost-btn" onClick={() => fileRef.current?.click()} title="Restore from backup"><Upload size={15} /></button>
+            <button className="ghost-btn" onClick={() => fileRef.current?.click()} title="Restore from a backup file"><Upload size={15} /></button>
+            <button className="ghost-btn" onClick={openHistory} title="Version history"><Clock size={15} /></button>
             <input ref={fileRef} type="file" accept="application/json" onChange={importJSON} style={{ display: "none" }} />
             <button className="add-btn" onClick={() => addTask("todo")}><Plus size={16} /> New task</button>
           </div>
@@ -446,6 +506,14 @@ export default function CommandCenter() {
           <div style={{ width: pct + "%", height: "100%", background: ORANGE, transition: "width .4s" }} />
         </div>
       </div>
+
+      {loadFailed && (
+        <div style={{ background: "#FBEAE1", borderBottom: "2px solid #C0392B", color: "#8A3A22", padding: "12px 22px", fontSize: 13.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 16 }}>⚠️</span>
+          <span>Couldn't load your board from the cloud, so editing is paused to protect your data. Don't add or change anything — just refresh the page. If it keeps failing, check your connection.</span>
+          <button onClick={() => window.location.reload()} style={{ background: "#C0392B", color: "#fff", border: "none", borderRadius: 7, padding: "6px 14px", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>Refresh</button>
+        </div>
+      )}
 
       {/* Filters */}
       <div style={{ display: "flex", gap: 10, padding: "14px 22px 6px", flexWrap: "wrap", alignItems: "center" }}>
@@ -732,6 +800,44 @@ export default function CommandCenter() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* ---------- Version history ---------- */}
+      {showHistory && (
+        <div className="overlay" onClick={() => setShowHistory(false)}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
+            <div className="sheet-head">
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 18, fontWeight: 700, color: CHARCOAL }}>Version history</div>
+                <div style={{ fontSize: 12.5, color: MUTED, marginTop: 3 }}>Auto-saved snapshots. Restore any one with a click.</div>
+              </div>
+              <button className="icon-btn" onClick={() => setShowHistory(false)}><X size={18} /></button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: "56vh", overflowY: "auto" }}>
+              {snapshots.length === 0 && <div style={{ color: MUTED, fontSize: 13, padding: "16px 2px" }}>No snapshots yet — the first will appear as you work.</div>}
+              {snapshots.map((s) => (
+                <div key={s.id} className="snap-row">
+                  <div>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, color: CHARCOAL }}>
+                      {new Date(s.created_at).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                    </div>
+                    <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>{s.task_count} tasks</div>
+                  </div>
+                  <button className="snap-restore" onClick={() => {
+                    if (window.confirm(`Restore this version (${s.task_count} tasks)? Your current board will be replaced — but a fresh snapshot is kept, so you can undo this too.`)) {
+                      takeSnapshot(tasksRef.current); // snapshot current state first, so restore is reversible
+                      restoreSnapshot(s);
+                    }
+                  }}>Restore</button>
+                </div>
+              ))}
+            </div>
+            <div className="sheet-foot">
+              <span style={{ fontSize: 11.5, color: MUTED }}>Keeps the last 30 versions.</span>
+              <button className="done-btn" onClick={() => setShowHistory(false)}>Close</button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1048,6 +1154,9 @@ const styleSheet = `
   .act-row:last-child { border-bottom:none; }
   .act-row:hover { background:#FBF6F3; }
   .act-icon { width:30px; height:30px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; flex-shrink:0; }
+  .snap-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:11px 13px; border:1px solid ${HAIR}; border-radius:9px; background:#FAFAFA; }
+  .snap-restore { background:${CHARCOAL}; color:#fff; border:none; border-radius:7px; padding:6px 14px; font-size:12.5px; font-weight:700; cursor:pointer; }
+  .snap-restore:hover { background:${ORANGE}; }
   .cinput { flex:1; border:1px solid ${HAIR}; border-radius:8px; padding:9px 11px; font-size:13px; font-family:inherit; outline:none; color:${CHARCOAL}; resize:none; line-height:1.45; overflow-y:auto; min-height:38px; max-height:140px; }
   .cinput:focus { border-color:${ORANGE}; }
   .csend { background:${CHARCOAL}; color:#fff; border:none; border-radius:8px; padding:0 12px; cursor:pointer; display:flex; align-items:center; height:38px; flex-shrink:0; }
