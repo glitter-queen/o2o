@@ -165,6 +165,7 @@ export default function CommandCenter() {
   const [doneCollapsed, setDoneCollapsed] = useState(false);
   const [cardsCollapsed, setCardsCollapsed] = useState(false);
   const [activity, setActivity] = useState([]);
+  const [expandedDays, setExpandedDays] = useState({});
   const fileRef = useRef(null);
   const [saveState, setSaveState] = useState("saved"); // "saved" | "saving" | "error"
   const saveTimer = useRef(null);
@@ -275,6 +276,7 @@ export default function CommandCenter() {
     const t = { id: uid(), createdAt: Date.now(), title: "", notes: "", status,
       assignee: "Ashley", category: "calendar", priority: "med", due: "", urgent: false, comments: [] };
     setTasks((ts) => [t, ...ts]); setEditingId(t.id);
+    logEvent(t, "created", "");
   };
   const passToNick = (id) => patch(id, { assignee: "Nick", status: "pending_nick" });
   const addComment = (id, text, attachment) => {
@@ -360,40 +362,45 @@ export default function CommandCenter() {
 
   // ----- Activity log helpers -----
   const KIND_META = {
+    created:   { label: "Created",   color: "#8A9497", icon: "➕" },
     completed: { label: "Completed", color: "#3E8E5A", icon: "✅" },
     moved:     { label: "Moved",     color: "#46626C", icon: "➡️" },
     commented: { label: "Comment",   color: ORANGE,    icon: "💬" },
   };
+  // Prefer the task's current title (in case it was renamed after the event).
+  const titleFor = (ev) => (tasks.find((x) => x.id === ev.task_id)?.title) || ev.task_title || "Untitled task";
   const dayKey = (iso) => { const d = new Date(iso); return d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate(); };
+  const fullDate = (d) => d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+  const shortDate = (d) => (d.getMonth() + 1) + "/" + d.getDate();
   const dayLabel = (iso) => {
     const d = new Date(iso); const t = new Date();
     const y = new Date(); y.setDate(t.getDate() - 1);
-    if (dayKey(iso) === dayKey(t.toISOString())) return "Today";
-    if (dayKey(iso) === dayKey(y.toISOString())) return "Yesterday";
-    return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+    if (dayKey(iso) === dayKey(t.toISOString())) return "Today, " + fullDate(d);
+    if (dayKey(iso) === dayKey(y.toISOString())) return "Yesterday, " + fullDate(d);
+    return d.toLocaleDateString("en-US", { weekday: "long" }) + ", " + fullDate(d);
   };
   const evTime = (iso) => new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const todayKey = dayKey(new Date().toISOString());
   // group activity by day (already sorted newest-first)
   const activityByDay = activity.reduce((acc, ev) => {
     const k = dayKey(ev.created_at);
-    (acc[k] = acc[k] || { label: dayLabel(ev.created_at), items: [] }).items.push(ev);
+    (acc[k] = acc[k] || { label: dayLabel(ev.created_at), short: shortDate(new Date(ev.created_at)), isToday: k === todayKey, items: [] }).items.push(ev);
     return acc;
   }, {});
-  const copyTodaysRecap = () => {
-    const t = new Date();
-    const today = activity.filter((ev) => dayKey(ev.created_at) === dayKey(t.toISOString()));
-    const completed = today.filter((e) => e.kind === "completed");
-    const moved = today.filter((e) => e.kind === "moved");
-    const commented = today.filter((e) => e.kind === "commented");
-    const lines = [`EOD Recap — ${t.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}`, ""];
-    if (completed.length) { lines.push(`✅ Completed (${completed.length}):`); completed.forEach((e) => lines.push(`  • ${e.task_title}`)); lines.push(""); }
-    if (moved.length) { lines.push(`➡️ Moved (${moved.length}):`); moved.forEach((e) => lines.push(`  • ${e.task_title} — ${e.detail}`)); lines.push(""); }
-    if (commented.length) { lines.push(`💬 Notes added (${commented.length}):`); commented.forEach((e) => lines.push(`  • ${e.task_title}`)); lines.push(""); }
-    if (!today.length) lines.push("No tracked activity today yet.");
-    const text = lines.join("\n").trim();
-    if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
-    return text;
+  const buildRecap = (dayEvents, headerDate) => {
+    const created = dayEvents.filter((e) => e.kind === "created");
+    const completed = dayEvents.filter((e) => e.kind === "completed");
+    const moved = dayEvents.filter((e) => e.kind === "moved");
+    const commented = dayEvents.filter((e) => e.kind === "commented");
+    const lines = [`EOD Recap — ${headerDate}`, ""];
+    if (completed.length) { lines.push(`✅ Completed (${completed.length}):`); completed.forEach((e) => lines.push(`  • ${titleFor(e)}`)); lines.push(""); }
+    if (moved.length) { lines.push(`➡️ Moved (${moved.length}):`); moved.forEach((e) => lines.push(`  • ${titleFor(e)} — ${e.detail}`)); lines.push(""); }
+    if (commented.length) { lines.push(`💬 Notes added (${commented.length}):`); commented.forEach((e) => lines.push(`  • ${titleFor(e)}`)); lines.push(""); }
+    if (created.length) { lines.push(`➕ Created (${created.length}):`); created.forEach((e) => lines.push(`  • ${titleFor(e)}`)); lines.push(""); }
+    if (!dayEvents.length) lines.push("No tracked activity.");
+    return lines.join("\n").trim();
   };
+  const copyText = (text) => { if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {}); };
 
   return (
     <div style={{ background: BG, minHeight: "100vh", fontFamily: "'Segoe UI', system-ui, sans-serif", color: CHARCOAL }}>
@@ -412,7 +419,7 @@ export default function CommandCenter() {
               </span>
             </div>
             <div style={{ color: "#9DA6A8", fontSize: 12.5, marginTop: 4, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <span>{tasks.length} tasks · {doneCount} done · <span style={{ color: ORANGE, fontWeight: 700 }}>{openQ} open notes</span></span>
+              <span>{tasks.length} tasks · {doneCount} done · <span style={{ color: ORANGE, fontWeight: 700 }}>{tasks.length - doneCount} open</span></span>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, fontWeight: 700,
                 color: saveState === "error" ? "#E08A7A" : saveState === "saving" ? "#C9B27A" : "#7FB08A" }}>
                 <span style={{ width: 7, height: 7, borderRadius: "50%", background: saveState === "error" ? "#C0392B" : saveState === "saving" ? "#C98A1E" : "#3E8E5A" }} />
@@ -681,36 +688,50 @@ export default function CommandCenter() {
 
       {/* ---------- ACTIVITY VIEW ---------- */}
       {view === "activity" && (
-        <div style={{ padding: "12px 22px 44px", maxWidth: 860 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 13, color: MUTED }}>Everything you completed, moved, or commented on — newest first.</span>
-            <button className="recap-btn" onClick={(e) => { copyTodaysRecap(); const b = e.currentTarget; const o = b.textContent; b.textContent = "Copied!"; setTimeout(() => { b.textContent = o; }, 1600); }}>
-              Copy today's recap
-            </button>
-          </div>
-          {activity.length === 0 && <div style={{ textAlign: "center", color: MUTED, padding: 40 }}>No activity logged yet. Completing, moving, or commenting on tasks will show up here.</div>}
-          {Object.keys(activityByDay).map((k) => (
-            <div key={k} style={{ marginBottom: 22 }}>
-              <div className="act-day">{activityByDay[k].label}</div>
-              <div className="act-list">
-                {activityByDay[k].items.map((ev) => (
-                  <div key={ev.id} className="act-row" onClick={() => { const t = tasks.find((x) => x.id === ev.task_id); if (t) setEditingId(t.id); }}>
-                    <span className="act-icon" style={{ background: (KIND_META[ev.kind]?.color || MUTED) + "18", color: KIND_META[ev.kind]?.color || MUTED }}>
-                      {KIND_META[ev.kind]?.icon || "•"}
-                    </span>
-                    <div style={{ minWidth: 0, flex: 1 }}>
-                      <div style={{ fontSize: 13.5 }}>
-                        <span style={{ fontWeight: 700, color: KIND_META[ev.kind]?.color || CHARCOAL }}>{KIND_META[ev.kind]?.label || ev.kind}</span>
-                        <span style={{ color: CHARCOAL }}>{" "}{ev.task_title}</span>
+        <div style={{ padding: "12px 22px 44px", maxWidth: 880 }}>
+          <div style={{ fontSize: 13, color: MUTED, marginBottom: 16 }}>Everything you created, completed, moved, or commented on — newest first. Click any row to open the task.</div>
+          {activity.length === 0 && <div style={{ textAlign: "center", color: MUTED, padding: 40 }}>No activity logged yet. Creating, completing, moving, or commenting on tasks will show up here.</div>}
+          {Object.keys(activityByDay).map((k) => {
+            const day = activityByDay[k];
+            const open = day.isToday || expandedDays[k];
+            return (
+              <div key={k} style={{ marginBottom: 22 }}>
+                <div className="act-day-head">
+                  {!day.isToday && (
+                    <button className="act-expand" onClick={() => setExpandedDays((e) => ({ ...e, [k]: !e[k] }))}>
+                      {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                    </button>
+                  )}
+                  <span className="act-day-label">{day.label}</span>
+                  <span className="act-day-count">{day.items.length}</span>
+                  <span style={{ flex: 1 }} />
+                  <button className="recap-btn" onClick={(e) => {
+                    copyText(buildRecap(day.items, day.label.replace(/^(Today|Yesterday), /, "")));
+                    const b = e.currentTarget; const o = b.textContent; b.textContent = "Copied!"; setTimeout(() => { b.textContent = o; }, 1600);
+                  }}>Copy recap for {day.short}</button>
+                </div>
+                {open && (
+                  <div className="act-list">
+                    {day.items.map((ev) => (
+                      <div key={ev.id} className="act-row" onClick={() => { const t = tasks.find((x) => x.id === ev.task_id); if (t) setEditingId(t.id); }}>
+                        <span className="act-icon" style={{ background: (KIND_META[ev.kind]?.color || MUTED) + "18", color: KIND_META[ev.kind]?.color || MUTED }}>
+                          {KIND_META[ev.kind]?.icon || "•"}
+                        </span>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ fontSize: 13.5 }}>
+                            <span style={{ fontWeight: 700, color: KIND_META[ev.kind]?.color || CHARCOAL }}>{KIND_META[ev.kind]?.label || ev.kind}</span>
+                            <span style={{ color: CHARCOAL }}>{" "}{titleFor(ev)}</span>
+                          </div>
+                          {ev.detail && <div style={{ fontSize: 12, color: MUTED, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ev.kind === "moved" ? ev.detail : `“${ev.detail}”`}</div>}
+                        </div>
+                        <span style={{ fontSize: 11.5, color: MUTED, whiteSpace: "nowrap", flexShrink: 0 }}>{evTime(ev.created_at)}</span>
                       </div>
-                      {ev.detail && <div style={{ fontSize: 12, color: MUTED, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ev.kind === "moved" ? ev.detail : `“${ev.detail}”`}</div>}
-                    </div>
-                    <span style={{ fontSize: 11.5, color: MUTED, whiteSpace: "nowrap", flexShrink: 0 }}>{evTime(ev.created_at)}</span>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -1015,9 +1036,13 @@ const styleSheet = `
   .ref-chip { font-size:11px; font-weight:700; border-radius:6px; padding:3px 8px; white-space:nowrap; }
   .ref-chip.cad { background:#EAF0F1; color:#46626C; }
   .ref-chip.prep { background:#FBEEE9; color:${ORANGE}; }
-  .recap-btn { background:${ORANGE}; color:#fff; border:none; border-radius:8px; padding:9px 16px; font-size:13px; font-weight:700; cursor:pointer; white-space:nowrap; }
+  .recap-btn { background:${ORANGE}; color:#fff; border:none; border-radius:8px; padding:7px 14px; font-size:12.5px; font-weight:700; cursor:pointer; white-space:nowrap; }
   .recap-btn:hover { filter:brightness(1.07); }
-  .act-day { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:1px; color:${ORANGE}; margin-bottom:8px; }
+  .act-day-head { display:flex; align-items:center; gap:9px; margin-bottom:9px; }
+  .act-expand { background:#fff; border:1px solid ${HAIR}; border-radius:6px; padding:2px; cursor:pointer; color:${MUTED}; display:flex; }
+  .act-expand:hover { color:${ORANGE}; border-color:${ORANGE}; }
+  .act-day-label { font-size:12.5px; font-weight:700; text-transform:uppercase; letter-spacing:1px; color:${ORANGE}; }
+  .act-day-count { font-size:12px; font-weight:600; color:${MUTED}; background:#EDF0F0; border-radius:10px; padding:1px 8px; }
   .act-list { background:#fff; border:1px solid ${HAIR}; border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(42,58,61,.05); }
   .act-row { display:flex; align-items:center; gap:12px; padding:12px 15px; border-bottom:1px solid #EEF0F0; cursor:pointer; transition:background .12s; }
   .act-row:last-child { border-bottom:none; }
