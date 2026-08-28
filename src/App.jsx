@@ -21,10 +21,15 @@ const STATUSES = [
   { id: "todo",          label: "To Do",          color: "#8A9497" },
   { id: "inprogress",    label: "In Progress",    color: ORANGE },
   { id: "pending_nick",  label: "Pending · Nick", color: "#46626C" },
+  { id: "nick_personal", label: "Nick's List · Personal", color: "#8065A0" },
+  { id: "nick_work",     label: "Nick's List · Work",     color: "#4A6FA5" },
   { id: "pending_other", label: "Pending · Other",color: "#C98A1E" },
   { id: "missing",       label: "Missing Info",   color: "#BB4A2E" },
   { id: "done",          label: "Done",           color: "#3E8E5A" },
 ];
+// The statuses that count as "assigned to Nick"
+const NICK_STATUSES = ["pending_nick", "nick_personal", "nick_work"];
+const isNickStatus = (id) => NICK_STATUSES.includes(id);
 const S = (id) => STATUSES.find((s) => s.id === id) || STATUSES[0];
 
 const CATEGORIES = {
@@ -164,6 +169,7 @@ export default function CommandCenter() {
   const [sortDir, setSortDir] = useState("asc"); // "asc" | "desc"
   const [doneCollapsed, setDoneCollapsed] = useState(false);
   const [cardsCollapsed, setCardsCollapsed] = useState(false);
+  const [statusFilter, setStatusFilter] = useState(null); // null | "nick" | "ashley"
   const [activity, setActivity] = useState([]);
   const [expandedDays, setExpandedDays] = useState({});
   const fileRef = useRef(null);
@@ -369,6 +375,9 @@ export default function CommandCenter() {
   const visible = tasks.filter((t) =>
     (fAssignee === "all" || t.assignee === fAssignee) &&
     (fCategory === "all" || t.category === fCategory) &&
+    (statusFilter === null ||
+      (statusFilter === "nick" && isNickStatus(t.status)) ||
+      (statusFilter === "ashley" && !isNickStatus(t.status) && t.status !== "done")) &&
     (search === "" || (t.title + " " + t.notes).toLowerCase().includes(search.toLowerCase())));
 
   const doneCount = tasks.filter((t) => t.status === "done").length;
@@ -517,6 +526,14 @@ export default function CommandCenter() {
 
       {/* Filters */}
       <div style={{ display: "flex", gap: 10, padding: "14px 22px 6px", flexWrap: "wrap", alignItems: "center" }}>
+        <button className={"nick-filter" + (statusFilter === "nick" ? " active" : "")}
+          onClick={() => setStatusFilter((f) => (f === "nick" ? null : "nick"))}>
+          <Flag size={15} strokeWidth={2.6} /> NICK
+        </button>
+        <button className={"ashley-filter" + (statusFilter === "ashley" ? " active" : "")}
+          onClick={() => setStatusFilter((f) => (f === "ashley" ? null : "ashley"))}>
+          Ashley
+        </button>
         <div className="search-wrap">
           <Search size={14} color={MUTED} />
           <input placeholder="Search tasks…" value={search} onChange={(e) => setSearch(e.target.value)} className="search-input" />
@@ -525,8 +542,8 @@ export default function CommandCenter() {
           options={[["all", "Everyone"], ...Object.keys(ASSIGNEES).map((k) => [k, ASSIGNEES[k].label])]} />
         <Filter label="Category" value={fCategory} onChange={setFCategory}
           options={[["all", "All"], ...Object.keys(CATEGORIES).map((k) => [k, CATEGORIES[k].label])]} />
-        {(fAssignee !== "all" || fCategory !== "all" || search) && (
-          <button className="clear-btn" onClick={() => { setFAssignee("all"); setFCategory("all"); setSearch(""); }}>Clear</button>
+        {(fAssignee !== "all" || fCategory !== "all" || search || statusFilter) && (
+          <button className="clear-btn" onClick={() => { setFAssignee("all"); setFCategory("all"); setSearch(""); setStatusFilter(null); }}>Clear</button>
         )}
         {view === "board" && (
           <button className="collapse-all" onClick={() => setCardsCollapsed((v) => !v)} style={{ marginLeft: "auto" }}>
@@ -538,7 +555,11 @@ export default function CommandCenter() {
       {/* ---------- BOARD VIEW ---------- */}
       {view === "board" && (
         <div className="board">
-          {STATUSES.map((col) => {
+          {STATUSES.filter((col) =>
+            statusFilter === null ? true :
+            statusFilter === "nick" ? isNickStatus(col.id) :
+            (!isNickStatus(col.id) && col.id !== "done")
+          ).map((col) => {
             const items = visible.filter((t) => t.status === col.id).sort(boardSort);
             return (
               <div key={col.id} className={"column" + (dragOverCol === col.id ? " over" : "")}
@@ -909,7 +930,7 @@ export default function CommandCenter() {
             </div>
             <div className="sheet-foot">
               <button className="del-btn" onClick={() => remove(editing.id)}><Trash2 size={14} /> Delete task</button>
-              <button className="done-btn" onClick={() => setEditingId(null)}>Done</button>
+              <button className="done-btn" onClick={() => setEditingId(null)}>Close</button>
             </div>
           </div>
         </div>
@@ -1048,6 +1069,16 @@ const styleSheet = `
   .sel:focus { border-color:${ORANGE}; }
   .sel.small { padding:6px 8px; font-size:12.5px; }
   .clear-btn { background:transparent; border:none; color:${ORANGE}; font-size:12.5px; cursor:pointer; font-weight:600; }
+  @keyframes nickGlow { 0%,100% { box-shadow:0 0 10px rgba(233,123,38,.55), 0 0 3px rgba(233,123,38,.5); } 50% { box-shadow:0 0 18px rgba(233,123,38,.85), 0 0 6px rgba(233,123,38,.7); } }
+  .nick-filter { display:inline-flex; align-items:center; gap:7px; background:${ORANGE}; color:#fff; border:none;
+    border-radius:9px; padding:10px 20px; font-size:14.5px; font-weight:800; letter-spacing:1.5px; cursor:pointer;
+    animation:nickGlow 2.4s ease-in-out infinite; }
+  .nick-filter:hover { filter:brightness(1.08); }
+  .nick-filter.active { outline:3px solid ${CHARCOAL}; outline-offset:2px; }
+  .ashley-filter { background:${CHARCOAL}; color:#fff; border:none; border-radius:8px; padding:8px 15px;
+    font-size:13px; font-weight:700; cursor:pointer; }
+  .ashley-filter:hover { filter:brightness(1.15); }
+  .ashley-filter.active { outline:3px solid ${ORANGE}; outline-offset:2px; }
 
   .board { display:flex; gap:14px; padding:16px 22px 40px; overflow-x:auto; align-items:flex-start; background:#2A3A3D; min-height:calc(100vh - 150px); }
   .column { background:#ECEEED; border-radius:12px; min-width:270px; max-width:270px; flex-shrink:0; display:flex; flex-direction:column; max-height:calc(100vh - 210px); }
